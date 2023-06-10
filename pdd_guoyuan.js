@@ -5,7 +5,7 @@
 
 [Script]
 cron "30 1,8,12,17 * * *" 
-
+const $ = new Env("多多果园");
 青龙环境变量 ddgyck ='AccessToken'
 export ddgyck="xxxxx"
 小程序或APP 进果园一圈，在请求头中搜索AccessToken,多账号@隔开
