@@ -3,7 +3,7 @@
 # 环境变量 elmck  值：SID=xxxx; cookie2=xxxx;   （按格式来）
 #pwd
 
-#eval "rm -rf ./ELM"
+eval "rm -rf ./ELM"
 
 _ftype=""
 get_arch=`arch`
