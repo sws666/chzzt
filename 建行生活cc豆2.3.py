@@ -17,16 +17,34 @@ import requests
 app_ua = ''  # 用app的ua，不填也能跑
 
 user_cookie = os.getenv("ccdck")
-doll_flag = 1  # 1开启抓娃娃，0关闭
-basket_flag = 1  # 1开启投篮球，0关闭
 
-doll_draw = 1  # 抓娃娃次数，为几一天只抽几次，总数小于10
-basket_draw = 1  # 投篮球次数，为几一天只玩几次，总数小于5
+'''
+doll_flag  1开启抓娃娃，0关闭
+doll_draw 抓娃娃次数，总数小于10
+'''
+doll_flag = 0  # 1开启抓娃娃，0关闭
+doll_draw = 1
+
+'''
+basket_flag  1开启投篮球，0关闭
+basket_draw  投篮球次数，总数小于5
+'''
+basket_flag = 1
+basket_draw = 5
+
+'''
+box_flag   1开启开盲盒，0关闭
+box_id  开盲盒类型，1为88豆，2为188豆，3为10000豆
+box_draw   开盲盒次数，总数小于5
+'''
+box_flag = 0
+box_id = 1
+box_draw = 2
+
 debug = 0  # 开启调式
 
 
 class CCD:
-    user_region = None
     zhc_token = None
     wx_uuid = None
     base_header = {
@@ -71,16 +89,17 @@ class CCD:
         }
 
     def run(self):
-        self.get_token()
-        self.region()
-        self.user_info()
-        self.sign_in()
-        self.getlist()
-        self.answer_state()
-        print('\n======== 专区任务 ========')
-        time.sleep(random.randint(3, 5))
-        self.get_csrftoken()
-        self.get_user_ccd()
+        if self.get_token():
+            self.user_info()
+            self.sign_in()
+            self.getlist()
+            self.answer_state()
+            print('\n======== 专区任务 ========')
+            time.sleep(random.randint(3, 5))
+            self.get_csrftoken()
+            self.get_user_ccd()
+        else:
+            print('刷新token失败，请检查变量')
 
     # 随机延迟默认1-1.5
     def sleep(self, min_delay=1, max_delay=1.5):
@@ -95,9 +114,9 @@ class CCD:
 
             try:
                 if method == 'GET':
-                    response = session.get(url, timeout = 3)
+                    response = session.get(url)
                 elif method == 'POST':
-                    response = session.post(url, json = data, timeout = 3)
+                    response = session.post(url, json = data)
                 else:
                     raise ValueError('Invalid HTTP method.')
 
@@ -130,17 +149,19 @@ class CCD:
             return_data = self.send_request(url, headers = self.token_headers, data = payload, method = 'POST')
             if return_data['code'] != 200:
                 print(return_data['message'])
-                raise ValueError('刷新token,请检查变量格式是否正确')
+                return False
+
             redirect_url = return_data['data'].get('redirectUrl')
             self.wx_uuid = return_data['data'].get('wxUUID')
             token = self.extract_token(redirect_url)
             if token:
                 self.zhc_token = token
                 self.auth_login(token)
+                return True
             else:
-                raise ValueError('刷新token失败')
+                return False
 
-        except ValueError as e:
+        except Exception as e:
             print(e)
 
     def extract_token(self, redirect_url):
@@ -161,17 +182,6 @@ class CCD:
         if return_data['code'] != 200:
             print(return_data['message'])
             return
-
-    # 获取用户地区代码
-    def region(self):
-        url = f'https://m3.dmsp.ccb.com/api/businessCenter/gis/getAddress?zhc_token={self.zhc_token}'
-        payload = {"lgt": 116.495434, "ltt": 40.3976539, "flag": 1}
-        return_data = self.send_request(url, headers = self.base_header, data = payload, method = 'POST')
-        self.sleep()
-        if return_data['code'] != 200:
-            print(return_data['message'])
-            return
-        self.user_region = return_data['data'].get('code')
 
     # 查询用户等级
     def user_info(self):
@@ -217,7 +227,7 @@ class CCD:
     # 获取浏览任务列表
     def getlist(self):
         list_url = f'https://m3.dmsp.ccb.com/api/businessCenter/taskCenter/getTaskList?zhc_token={self.zhc_token}'
-        payload = {"publishChannels": "03", "regionId": self.user_region}  # 440300
+        payload = {"publishChannels": "03", "regionId": "110100"}  # 440300
 
         return_data = self.send_request(url = list_url, headers = self.base_header, data = payload, method = 'POST')
         self.sleep()
@@ -378,6 +388,8 @@ class CCD:
                 self.get_doll()
                 print('\n---投篮球游戏----')
                 self.do_basket()
+                print('\n---开盲盒----')
+                self.open_box()
             else:
                 print('CSRF token or Authorization not found.')
         except requests.RequestException as e:
@@ -402,19 +414,66 @@ class CCD:
         go_url = 'https://fission-events.ccbft.com/activity/dmspmileage/go/224/5P87Md3y'
 
         requests.get(url = index_url, headers = self.bus_headers)
+
         tasks_data = self.send_request(tasklist_url, headers = self.bus_headers)
 
-        if tasks_data['status'] != 'success':
-            return print(tasks_data['message'])
+        if not tasks_data or tasks_data['status'] != 'success':
+            print(tasks_data['message'])
+            return
 
         task_list = tasks_data.get('data', {}).get('acttask', {}).get('limit_time')
+        user_map_ident = tasks_data.get('data', {}).get('user_map_ident', '')
 
+        print(f'当前是第 {user_map_ident} 张地图')
+
+        rewards = tasks_data.get('data', {}).get('map', {}).get('config', {}).get('node')
+        self.process_rewards(rewards)
+
+        self.process_tasks(task_list)
+
+        self.sleep()
+
+        query_data = self.send_request(tasklist_url, headers = self.bus_headers)
+        rewards = query_data.get('data', {}).get('map', {}).get('config', {}).get('node')
+        self.process_rewards(rewards)
+
+        surplus = query_data.get('data', {}).get('mileage', {}).get('surplus')
+        if surplus != '0':
+            go_data = self.send_request(go_url, headers = self.bus_headers, method = 'POST')
+            if go_data:
+                mileage_go = go_data.get('data', {}).get('mileage_go', '')
+                user_node = go_data.get('data', {}).get('user_node_value')
+                print(f'前进: {mileage_go}里程， 当前: {user_node}里程')
+
+    def process_rewards(self, rewards):
+        for reward in rewards:
+            value = reward.get('value')
+            state = reward.get('state')
+            if value == 0 or state != 3:
+                continue
+            elif value == 5000 and state == 4:
+                replace_url = 'https://fission-events.ccbft.com/activity/dmspmileage/togglesmap/224/5P87Md3y'
+                replace_data = self.send_request(replace_url, headers = self.bus_headers, method = 'POST')
+                if replace_data and replace_data['status'] == 'success':
+                    print('更换地图成功')
+                    self.sleep()
+            else:
+                getreward_url = 'https://fission-events.ccbft.com/activity/dmspmileage/draw/224/5P87Md3y'
+                reward_payload = {"value": value}
+                rewrd_data = self.send_request(getreward_url, headers = self.bus_headers, data = reward_payload,
+                                               method = 'POST')
+                if rewrd_data['status'] != 'success':
+                    return print(rewrd_data['message'])
+                prizename = rewrd_data.get('data', {}).get('prizename')
+                print(f'领取 {value}里程奖励: {prizename}')
+                time.sleep(3)
+
+    def process_tasks(self, task_list):
         for task in task_list:
             ident = task.get('ident')
             title = task.get('title')
             state = task.get('state')
             reward = task.get('reward')
-
             if state == 1:
                 print(f'--已完成: {title}')
             else:
@@ -422,37 +481,9 @@ class CCD:
                 dotask_url = 'https://fission-events.ccbft.com/activity/dmspmileage/taskgo/224/5P87Md3y'
                 do_payload = {"type": "limit_time", "ident": ident}
                 do_data = self.send_request(dotask_url, headers = self.bus_headers, data = do_payload, method = 'POST')
-
-                if do_data['status'] != 'success':
-                    return print(do_data['message'])
-                print(f'--浏览成功获得: {reward} 里程')
-                self.sleep()
-
-        self.sleep()
-        query_data = self.send_request(tasklist_url, headers = self.bus_headers)
-        surplus = query_data.get('data', {}).get('mileage').get('surplus')
-        rewards = query_data.get('data', {}).get('map', {}).get('config').get('node')
-        if surplus != '0':
-            go_data = self.send_request(go_url, headers = self.bus_headers, method = 'POST')
-
-            mileage_go = go_data.get('data', {}).get('mileage_go', '')
-            user_node = go_data.get('data', {}).get('user_node_value')
-            print(f'前进: {mileage_go}里程， 当前: {user_node}里程')
-
-        for reward in rewards:
-            value = reward.get('value')
-            state = reward.get('state')
-            if value == 0 or state != 3:
-                continue
-
-            getreward_url = 'https://fission-events.ccbft.com/activity/dmspmileage/draw/224/5P87Md3y'
-            reward_payload = {"value": value}
-            rewrd_data = self.send_request(getreward_url, headers = self.bus_headers, data = reward_payload,
-                                           method = 'POST')
-            if rewrd_data['status'] != 'success':
-                return print(rewrd_data['message'])
-            prizename = rewrd_data.get('data', {}).get('prizename')
-            print(f'领取 {value}里程奖励: {prizename}')
+                if do_data and do_data['status'] == 'success':
+                    print(f'--浏览成功获得: {reward} 里程')
+                time.sleep(3)
 
     # 跨境专区新
     def border_draw(self):
@@ -642,6 +673,57 @@ class CCD:
                 time.sleep(2.5)
                 basket_num -= 1
             remain_daily -= 1
+
+    # 开盲盒
+    def open_box(self):
+        if box_flag == 0:
+            print('已关闭开盲盒')
+            return
+
+        type_url = 'https://fission-events.ccbft.com/activity/dmspblindbox/index/224/xZ4JKaPl'
+        type_data = self.send_request(type_url, headers = self.bus_headers)
+        self.sleep()
+
+        types = type_data.get('data', [])
+
+        for value in types:
+            pot_id = value['pot_id']
+            pot_name = value['pot_name']
+            draw_one_ccb = value['draw_one_ccb']
+
+            if box_id == pot_id:
+                print(f'当前盲盒种类: [{pot_name}], 需消耗: {draw_one_ccb}cc豆')
+                self.process_opening(pot_id)
+                break
+        else:
+            print("未找到对应盲盒种类")
+
+    def process_opening(self, box_id):
+        num_url = 'https://fission-events.ccbft.com/Component/draw/getUserCCB/224/xZ4JKaPl'
+        num_data = self.send_request(num_url, headers = self.bus_headers)
+        self.sleep()
+
+        draw_num = num_data.get('data', {}).get('draw_day_max_num', '')
+        user_num = num_data.get('data', {}).get('user_day_draw_num', '')
+
+        surplus_num = draw_num - int(user_num)
+        num = draw_num - box_draw
+
+        print(f'--当前开盲盒次数: {surplus_num}')
+
+        while surplus_num > num:
+            open_url = 'https://fission-events.ccbft.com/activity/dmspblindbox/draw/224/xZ4JKaPl'
+            open_data = self.send_request(open_url, headers = self.bus_headers, data = {"pot_id": box_id},
+                                          method = 'POST')
+
+            if open_data['status'] != 'success':
+                print(open_data['message'])
+                return
+
+            prizename = open_data.get('data', {}).get('prizename', '')
+            print(f'开盲盒获得: {prizename}')
+            time.sleep(3)
+            surplus_num -= 1
 
     # 查询cc豆及过期cc豆时间
     def get_user_ccd(self):
